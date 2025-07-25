@@ -21,7 +21,7 @@ function App() {
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/data-sources" /> : <Login />} />
         <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" />} />
-        <Route path="/data-sources" element={user ? <DataSources /> : <Navigate to="/login" />} />
+        <Route path="/data-sources" element={user ? <DataSources user={user} /> : <Navigate to="/login" />} />
         <Route path="*" element={<Navigate to="/login" />} />
       </Routes>
     </Router>
