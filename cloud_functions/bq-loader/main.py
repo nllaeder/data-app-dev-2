@@ -1,7 +1,6 @@
 import base64
 import json
 import os
-
 import functions_framework
 from google.cloud import bigquery
 
@@ -9,13 +8,11 @@ from google.cloud import bigquery
 #                      1. CONFIGURATION
 # ===================================================================
 
-# --- Environment Variables ---
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "mis581-capstone-data")
-BIGQUERY_DATASET_ID = os.getenv("BIGQUERY_DATASET_ID", "raw_data")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "data-app-dev-2")
+BQ_DATASET_ID = os.getenv("BQ_DATASET", "insightiq_data")
 
-# --- BigQuery Client ---
-bq_client = bigquery.Client(project=GCP_PROJECT_ID)
-
+# --- Client ---
+bq_client = bigquery.Client()
 
 # ===================================================================
 #           2. MAIN CLOUD FUNCTION (PUBSUB TRIGGER)
@@ -24,48 +21,41 @@ bq_client = bigquery.Client(project=GCP_PROJECT_ID)
 @functions_framework.cloud_event
 def bq_loader(cloud_event):
     """
-    Triggered by a message on 'load-to-bigquery'. Loads a single record
-    into the appropriate BigQuery table.
+    Receives a data payload from a Pub/Sub topic and loads it into BigQuery.
+    1. Triggered by a message on the 'bq-loader-topic'.
+    2. Decodes the message to get the data and target table name.
+    3. Streams the data into the specified BigQuery table.
     """
+    # 1. Decode the incoming message
     try:
-        # 1. Decode the incoming message
         message_data_encoded = cloud_event.data["message"]["data"]
-        message_data_decoded = base64.b64decode(message_data_encoded).decode("utf-8")
-        data_payload = json.loads(message_data_decoded)
+        message_data_decoded = base64.b64decode(message_data_encoded).decode('utf-8')
+        payload = json.loads(message_data_decoded)
 
-        # 2. Extract metadata for routing
-        tenant_id = data_payload.get("tenant_id")
-        data_type = data_payload.get("data_type")
-        record = data_payload.get("data")
+        table_name = payload.get("table_name")
+        data_row = payload.get("data") # This should be a single JSON object/dict
 
-        if not all([tenant_id, data_type, record]):
-            print(f"ERROR: Missing one or more required fields: tenant_id, data_type, data.")
+        if not table_name or not data_row:
+            print(f"!!! Error: Missing 'table_name' or 'data' in payload: {payload}")
             return
+    except Exception as e:
+        print(f"!!! Error decoding Pub/Sub message: {e}")
+        return
 
-        print(f"Processing record for tenant '{tenant_id}', type '{data_type}'.")
+    # 2. Prepare the data for BigQuery
+    # The insert_rows_json method expects a list of dictionaries.
+    rows_to_insert = [data_row]
+    table_id = f"{GCP_PROJECT_ID}.{BQ_DATASET_ID}.{table_name}"
 
-        # 3. Determine the target BigQuery table and schema
-        table_name = f"{tenant_id}_{data_type}_raw"
-        table_id = f"{GCP_PROJECT_ID}.{BIGQUERY_DATASET_ID}.{table_name}"
+    print(f"--- Attempting to insert 1 row into table: {table_id} ---")
 
-        schema = [
-            bigquery.SchemaField("raw_data", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("tenant_id", "STRING", mode="REQUIRED"),
-        ]
-
-        # 4. Prepare the row to insert
-        # The incoming 'record' is the raw data itself
-        row_to_insert = {
-            "raw_data": json.dumps(record),
-            "tenant_id": tenant_id
-        }
-
-        # 5. Load the data into BigQuery
-        errors = bq_client.insert_rows_json(table_id, [row_to_insert])
+    # 3. Stream the data into BigQuery
+    try:
+        errors = bq_client.insert_rows_json(table_id, rows_to_insert)
         if not errors:
-            print(f"Successfully inserted 1 record into {table_id}.")
+            print("Successfully inserted row into BigQuery.")
         else:
-            print(f"!!! ERROR inserting record into {table_id}: {errors}")
+            print(f"!!! BigQuery insertion errors: {errors}")
 
     except Exception as e:
-        print(f"!!! An unexpected error occurred in the BQ Loader: {e}")
+        print(f"!!! An unexpected error occurred loading data to BigQuery: {e}")
